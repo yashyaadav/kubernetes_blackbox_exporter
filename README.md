@@ -67,7 +67,9 @@ http://localhost:9115
 Alternatively, you can access the Blackbox Exporter directly from the EC2 instance by visiting:
 
 ```
-http://<public_ip_ec2_instance>:30500
+http://<minikube_ip>:<node_port_blackbox_svc>
+# If Instance available through a Public IP
+http://<public_ip_ec2_instance>:<node_port_blackbox_svc>
 ```
 
 ---
