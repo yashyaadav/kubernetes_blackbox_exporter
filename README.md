@@ -87,6 +87,7 @@ http://<public_ip_ec2_instance>:30500
    ```
    # Example changes to prometheus.yaml
    # This job is for scraping blackbox-exporter metrics
+   ```bash
    - job_name: 'blackbox-exporter-metrics'
         metrics_path: /probe
         params:
@@ -102,8 +103,7 @@ http://<public_ip_ec2_instance>:30500
            target_label: instance
          - target_label: __address__
            replacement: "blackbox-exporter.monitoring.svc:9115"
-
-   Add the necessary scrape configurations from `prometheus_changes.yaml`.
+    ```
 
 ---
 
