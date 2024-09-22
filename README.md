@@ -40,7 +40,10 @@ Make sure the security group for your EC2 instance allows traffic on port **3050
 To expose Prometheus, Grafana, Kube-state-metrics, Elasticsearch, Kibana, and Blackbox Exporter on your local machine, set up port forwarding:
 
 ```bash
-ssh -i "daily_aws_key.pem" -L 9090:192.168.49.2:31062 \  # Prometheus
+# <minikube_ip> : 192.168.49.2
+# For example
+# Exclude Elastic Kibana and kube-state-metrics if not installed earlier
+ssh -i "your_ec2_key.pem" -L 9090:192.168.49.2:31062 \  # Prometheus
 -L 3000:192.168.49.2:30717 \  # Grafana
 -L 8080:192.168.49.2:30767 \  # Kube-state-metrics
 -L 9200:192.168.49.2:30092 \  # Elasticsearch
@@ -82,6 +85,23 @@ http://<public_ip_ec2_instance>:30500
    ```bash
    kubectl edit configmap <prometheus-cm-name> -n monitoring
    ```
+   # Example changes to prometheus.yaml
+   # This job is for scraping blackbox-exporter metrics
+   - job_name: 'blackbox-exporter-metrics'
+        metrics_path: /probe
+        params:
+          module: [http_endpoint]
+        static_configs:
+          - targets:
+              - https://www.google.com
+              - http://<service_name>.<namespace_name>.svc:3000/<endpoint_name>
+        relabel_configs:
+         - source_labels: [__address__]
+           target_label: __param_target
+         - source_labels: [__param_target]
+           target_label: instance
+         - target_label: __address__
+           replacement: "blackbox-exporter.monitoring.svc:9115"
 
    Add the necessary scrape configurations from `prometheus_changes.yaml`.
 
@@ -112,13 +132,16 @@ After updating the Prometheus ConfigMap, you need to restart the Prometheus serv
 
 You should now be able to access all services, including the Blackbox Exporter, through Prometheus and Grafana.
 
-### Quick Access Links:
+### Quick Access Links (If accessing from local browser and minikube on EC2 instance):
 - **Prometheus**: `http://localhost:9090`
 - **Grafana**: `http://localhost:3000`
 - **Kube-State-Metrics**: `http://localhost:8080/metrics`
 - **Elasticsearch**: `http://localhost:9200`
 - **Kibana**: `http://localhost:5601`
 - **Blackbox Exporter**: `http://localhost:9115`
+
+### Quick Access Links (If accessing services from minikube clusters):
+- **Blackbox Exporter**: `http://<minikube_ip:<node_port>`
 
 ---
 
