@@ -141,7 +141,7 @@ You should now be able to access all services, including the Blackbox Exporter, 
 - **Blackbox Exporter**: `http://localhost:9115`
 
 ### Quick Access Links (If accessing services from minikube clusters):
-- **Blackbox Exporter**: `http://<minikube_ip:<node_port>`
+- **Blackbox Exporter**: `http://<minikube_ip>:<node_port>`
 
 ---
 
