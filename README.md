@@ -97,7 +97,7 @@ http://<public_ip_ec2_instance>:<node_port_blackbox_svc>
         static_configs:
           - targets:
               - https://www.google.com
-              - http://<service_name>.<namespace_name>.svc:3000/<endpoint_name>
+              - http://<service_name>.<namespace_name>.svc:<svc_node_port_or_forwarded_port_of_local_browser_machine>/<endpoint_name>
         relabel_configs:
          - source_labels: [__address__]
            target_label: __param_target
