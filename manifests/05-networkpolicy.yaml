@@ -1,0 +1,68 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: exporter
+    app.kubernetes.io/part-of: monitoring
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: blackbox-exporter
+      app.kubernetes.io/component: exporter
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow Prometheus to scrape /metrics and /probe.
+    # IMPORTANT: the from-selector must match how your Prometheus pods
+    # are labelled. The defaults below cover the prom/prometheus image
+    # and the prometheus-operator-managed pod label. Adjust as needed.
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+        - podSelector:
+            matchLabels:
+              app: prometheus
+      ports:
+        - protocol: TCP
+          port: 9115
+  egress:
+    # DNS resolution for probe targets.
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # The exporter is a prober: by definition it must reach arbitrary
+    # external endpoints. We exclude RFC1918 / link-local / loopback
+    # ranges from the "external" rule and define them as a separate
+    # rule so cluster-internal probes are explicit and auditable.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+    # Cluster-internal probe targets. Open up the in-cluster ranges
+    # only if you probe services running in the cluster; tighten or
+    # remove this rule otherwise.
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/8
+        - ipBlock:
+            cidr: 172.16.0.0/12
+        - ipBlock:
+            cidr: 192.168.0.0/16
