@@ -1,150 +1,229 @@
+# kubernetes_blackbox_exporter
 
-# Kubernetes Blackbox Exporter Setup
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Image: prom/blackbox-exporter](https://img.shields.io/badge/image-prom%2Fblackbox--exporter%3Av0.28.0-informational)](https://github.com/prometheus/blackbox_exporter/releases/tag/v0.28.0)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.24%2B-326CE5?logo=kubernetes&logoColor=white)](https://kubernetes.io/)
 
-This guide will walk you through setting up the Blackbox Exporter in a Kubernetes cluster running on Minikube in an EC2 instance, along with Prometheus, Grafana, and other related services.
+Production-aware Kubernetes manifests for [prom/blackbox-exporter](https://github.com/prometheus/blackbox_exporter), with alerts, runbooks, and a Grafana dashboard included.
+
+## What & why
+
+Blackbox Exporter probes endpoints over HTTP, HTTPS, TCP, ICMP, and DNS, then exposes the result as Prometheus metrics. It complements metrics emitted from inside your applications (Prometheus client libraries, USE/RED dashboards) with outside-in checks — the same view your users get.
+
+Use this repo as a starting point for adding synthetic / blackbox monitoring to a Prometheus stack on Kubernetes. The manifests harden the upstream image (non-root, dropped capabilities, resource bounds, network policy), the alerts cover the common failure modes, and the dashboard makes the results legible.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    User([User / Operator]) -- views --> Grafana
+    Grafana -- queries --> Prometheus
+    Prometheus -- scrapes /metrics --> BBE[Blackbox Exporter]
+    Prometheus -- scrapes /probe --> BBE
+    BBE -- HTTP / TCP / DNS --> Targets[(External & internal targets)]
+    Prometheus -- evaluates rules --> AM[Alertmanager]
+    AM -- routes alerts --> Notif[Slack / PagerDuty / email]
+
+    subgraph cluster[Kubernetes cluster — monitoring namespace]
+        Prometheus
+        BBE
+        AM
+        Grafana
+    end
+```
+
+More detail in [docs/architecture.md](docs/architecture.md).
+
+## Choose your path
+
+How you wire Prometheus to the exporter depends on whether you run [prometheus-operator](https://github.com/prometheus-operator/prometheus-operator) (e.g. kube-prometheus-stack):
+
+| If you have…                                            | Apply…                                                                  | And the alerts work via… |
+| ------------------------------------------------------- | ----------------------------------------------------------------------- | ------------------------ |
+| `monitoring.coreos.com` CRDs (operator)                 | All files in `manifests/`                                               | `manifests/07-prometheusrule.yaml` |
+| Plain Prometheus with a static `prometheus.yml`         | `manifests/00..05` (skip the ServiceMonitor / PrometheusRule)           | Merge alerts into your existing rules file |
+
+Check with: `kubectl api-resources | grep monitoring.coreos.com`.
 
 ## Prerequisites
 
-Before you start, ensure that:
-- You have access to an EC2 instance running Minikube.
-- You have SSH access to the EC2 instance.
-- Prometheus and Grafana are installed and running in the `monitoring` namespace.
+- A Kubernetes cluster (1.24+ tested).
+- A `monitoring` namespace (or another; adjust the manifests' `metadata.namespace`).
+- Prometheus and Grafana already installed in that namespace.
 
----
-
-## 📥 Apply Blackbox Exporter Manifests
-
-1. **Apply the ConfigMap for Blackbox Exporter**:
-   ```bash
-   kubectl apply -f blackbox_cm.yaml -n monitoring
-   ```
-
-2. **Apply the Blackbox Exporter Deployment**:
-   ```bash
-   kubectl apply -f blackbox_deployment.yaml -n monitoring
-   ```
-
-3. **Apply the Blackbox Exporter Service**:
-   ```bash
-   kubectl apply -f blackbox_svc.yaml -n monitoring
-   ```
-
----
-
-## 🌐 Expose Blackbox Exporter on EC2
-
-Make sure the security group for your EC2 instance allows traffic on port **30500** to access the Blackbox Exporter.
-
-### Access Blackbox Exporter from Local Browser
-
-To expose Prometheus, Grafana, Kube-state-metrics, Elasticsearch, Kibana, and Blackbox Exporter on your local machine, set up port forwarding:
+## Quick start
 
 ```bash
-# <minikube_ip> : 192.168.49.2
-# For example
-# Exclude Elastic Kibana and kube-state-metrics if not installed earlier
-ssh -i "your_ec2_key.pem" -L 9090:192.168.49.2:31062 \  # Prometheus
--L 3000:192.168.49.2:30717 \  # Grafana
--L 8080:192.168.49.2:30767 \  # Kube-state-metrics
--L 9200:192.168.49.2:30092 \  # Elasticsearch
--L 5601:192.168.49.2:30000 \  # Kibana
--L 9115:192.168.49.2:30500 \  # Blackbox Exporter
-ubuntu@<public_ip_ec2_instance>
+# Create the namespace if you don't already have one.
+kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+# Apply the manifests.
+kubectl apply -f manifests/ -n monitoring
+
+# Wait for the rollout.
+kubectl -n monitoring rollout status deployment/blackbox-exporter
 ```
 
-### 🔗 Local Access to Blackbox Exporter
+If you are on the non-operator path, also merge `prometheus/scrape-config-example.yaml` into your Prometheus configuration and restart Prometheus.
 
-Access the Blackbox Exporter in your local browser using:
+## Wiring Prometheus
 
+### Operator path
+
+`manifests/06-servicemonitor.yaml` ships two resources:
+
+- A **ServiceMonitor** that scrapes the exporter's own `/metrics` (job `blackbox-exporter`).
+- A **Probe** custom resource that drives `/probe` against a curated list of external URLs (job `blackbox`). Edit the `staticConfig.static` list in that file to point at your targets.
+
+> **Important:** kube-prometheus-stack's Prometheus typically selects ServiceMonitors and Probes by a `release: <chart-release-name>` label. If your resources are silently ignored, add that label and re-apply.
+
+### Non-operator path
+
+See [prometheus/scrape-config-example.yaml](prometheus/scrape-config-example.yaml). It defines two jobs (`blackbox-exporter` and `blackbox`) using the standard relabel chain. Merge into your existing `scrape_configs:` and restart Prometheus:
+
+```bash
+kubectl rollout restart deployment <prometheus-deployment> -n monitoring
 ```
-http://localhost:9115
+
+## Verification
+
+```bash
+# Pods healthy
+kubectl -n monitoring get pods -l app.kubernetes.io/name=blackbox-exporter
+
+# Reach the exporter UI locally
+kubectl -n monitoring port-forward svc/blackbox-exporter 9115:9115
+
+# In another shell, run a probe manually
+curl -s 'http://localhost:9115/probe?target=https://example.com&module=http_2xx' \
+  | grep -E '^probe_success'
+# Expect: probe_success 1
 ```
 
----
+You can also visit `http://localhost:9115` in a browser for the exporter's built-in UI (lists modules and recent probes).
 
-### 🌍 Access Blackbox Exporter from EC2 Instance
+## Probe modules
 
-Alternatively, you can access the Blackbox Exporter directly from the EC2 instance by visiting:
+The shipped `ConfigMap` (`manifests/02-configmap.yaml`) provides:
 
+| Module          | Use case                                                                  |
+| --------------- | ------------------------------------------------------------------------- |
+| `http_2xx`      | HTTP GET, expect 2xx (default for most websites and APIs).                |
+| `http_post_2xx` | HTTP POST with empty body (liveness endpoints that require POST).         |
+| `tcp_connect`   | Plain TCP connect (databases, queues, anything non-HTTP).                 |
+| `dns_udp`       | DNS A-record lookup over UDP (validates a resolver or DNS server).        |
+
+`icmp` is intentionally omitted — see [Enabling ICMP](#enabling-icmp).
+
+## Alerts
+
+`manifests/07-prometheusrule.yaml` defines six alerts:
+
+| Alert                              | Severity | When it fires                                                   |
+| ---------------------------------- | -------- | --------------------------------------------------------------- |
+| `BlackboxProbeFailing`             | critical | `probe_success == 0` for 5m                                     |
+| `BlackboxProbeSlowHttp`            | warning  | `probe_duration_seconds{job="blackbox"} > 1` for 10m            |
+| `BlackboxSslCertExpiringSoon`      | warning  | TLS cert expires within 14 days                                 |
+| `BlackboxSslCertExpiringCritical`  | critical | TLS cert expires within 3 days                                  |
+| `BlackboxExporterDown`             | critical | `up{job="blackbox-exporter"} == 0` for 5m                       |
+| `BlackboxProbeHttpFailure`         | warning  | `probe_http_status_code` outside 200–399 for 5m                 |
+
+Each alert carries a `runbook_url` pointing to a runbook in [docs/runbooks/](docs/runbooks/).
+
+## Grafana dashboard
+
+Import [`grafana/blackbox-dashboard.json`](grafana/blackbox-dashboard.json):
+
+1. Grafana → Dashboards → New → Import.
+2. Upload the JSON file.
+3. Select your Prometheus datasource when prompted.
+
+Panels:
+
+- Probe success / duration / status code (current state).
+- Probe success over time.
+- HTTP phase breakdown (`resolve` / `connect` / `tls` / `processing` / `transfer`) — the panel that turns "the probe is slow" into "TLS handshake is slow".
+- TLS certificate days remaining.
+- Exporter health (`up{job="blackbox-exporter"}`).
+
+## Security notes
+
+The Deployment ships locked down by default:
+
+- Runs as non-root (uid/gid 65534, `nobody`).
+- `readOnlyRootFilesystem: true`, `allowPrivilegeEscalation: false`.
+- All Linux capabilities dropped (`capabilities.drop: [ALL]`).
+- `seccompProfile.type: RuntimeDefault`.
+- Dedicated ServiceAccount with `automountServiceAccountToken: false`.
+- `NetworkPolicy` restricts ingress on port 9115 to Prometheus pods and constrains egress to DNS plus the public internet (minus RFC1918 / loopback / link-local) plus explicit in-cluster CIDRs.
+
+### Enabling ICMP
+
+The ICMP prober requires `CAP_NET_RAW`, which conflicts with dropping all capabilities. To enable it, edit `manifests/03-deployment.yaml`:
+
+```yaml
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+    add:
+      - NET_RAW           # required for ICMP
 ```
-http://<minikube_ip>:<node_port_blackbox_svc>
-# If Instance available through a Public IP
-http://<public_ip_ec2_instance>:<node_port_blackbox_svc>
+
+Then add an `icmp` module to the ConfigMap:
+
+```yaml
+icmp:
+  prober: icmp
+  timeout: 5s
+  icmp:
+    preferred_ip_protocol: "ip4"
 ```
 
----
+You can keep `runAsNonRoot: true` — modern kernels honour `CAP_NET_RAW` for non-root users — but some older kernels require `runAsUser: 0`. Test on your distribution.
 
-## ⚙️ Configure Prometheus for Blackbox Exporter Scraping
+## Versioning and image policy
 
-1. **Edit the Prometheus ConfigMap to Add Scrape Configurations**:
+The exporter image is pinned to a specific minor version (currently `v0.28.0`). Bump quarterly or when upstream ships a security fix; do not use `:latest` (reproducible deploys matter more than the convenience).
 
-   First, retrieve the list of ConfigMaps in the `monitoring` namespace:
-   ```bash
-   kubectl get configmaps -n monitoring
-   ```
+Check the latest stable release at <https://github.com/prometheus/blackbox_exporter/releases>.
 
-2. **Edit the Prometheus ConfigMap**:
-   ```bash
-   kubectl edit configmap <prometheus-cm-name> -n monitoring
-   ```
-   # Example changes to prometheus.yaml
-   # This job is for scraping blackbox-exporter metrics
-   ```bash
-   - job_name: 'blackbox-exporter-metrics'
-        metrics_path: /probe
-        params:
-          module: [http_endpoint]
-        static_configs:
-          - targets:
-              - https://www.google.com
-              - http://<service_name>.<namespace_name>.svc:<svc_node_port_or_forwarded_port_of_local_browser_machine>/<endpoint_name>
-        relabel_configs:
-         - source_labels: [__address__]
-           target_label: __param_target
-         - source_labels: [__param_target]
-           target_label: instance
-         - target_label: __address__
-           replacement: "blackbox-exporter.monitoring.svc:9115"
-    ```
+## Local commands
 
----
+A small `Makefile` wraps the day-to-day operations:
 
-## 🔄 Restart Prometheus
+```bash
+make apply           # kubectl apply -f manifests/
+make port-forward    # kubectl port-forward svc/blackbox-exporter 9115:9115
+make probe           # curl /probe and assert probe_success 1
+make validate        # kubeconform -strict (requires kubeconform installed)
+```
 
-After updating the Prometheus ConfigMap, you need to restart the Prometheus server to apply the changes.
+Override the namespace with `make apply NS=observability`.
 
-- **For Prometheus as a Deployment**:
-  ```bash
-  kubectl rollout restart deployment <prometheus-deployment-name> -n monitoring
-  ```
+## Troubleshooting
 
-  Example:
-  ```bash
-  kubectl rollout restart deployment prometheus-server -n monitoring
-  ```
+**ServiceMonitor / Probe / PrometheusRule is silently ignored.**
+kube-prometheus-stack selects user-defined resources by a `release: <chart>` label. Add it under `metadata.labels` on the resource and re-apply.
 
-- **For Prometheus as a StatefulSet**:
-  ```bash
-  kubectl rollout restart statefulset prometheus-server -n monitoring
-  ```
+**`endpoints` for the Service is empty.**
+The Service selector does not match any pod labels. After the relabeling done in this release, both should use `app.kubernetes.io/name=blackbox-exporter, app.kubernetes.io/component=exporter`. Confirm with `kubectl -n monitoring get endpoints blackbox-exporter`.
 
----
+**Probe metrics carry the exporter's IP as `instance`, not the target URL.**
+The relabel chain is wrong. The minimal chain is: `__address__ -> __param_target`, `__param_target -> instance`, then rewrite `__address__` to the exporter's address. See [prometheus/scrape-config-example.yaml](prometheus/scrape-config-example.yaml) for a working example.
 
-## 🚀 Ready to Monitor!
+**`probe_success` is `1` but the page is broken.**
+The module's `valid_status_codes` may be too permissive. Tighten the list, or layer on a `BlackboxProbeHttpFailure` alert (already shipped).
 
-You should now be able to access all services, including the Blackbox Exporter, through Prometheus and Grafana.
+**NetworkPolicy is blocking probes.**
+If you probe targets via in-cluster service DNS, confirm the destination's pod / namespace is reachable via the egress rules in `manifests/05-networkpolicy.yaml`. The shipped policy explicitly lists in-cluster CIDRs — adjust if your cluster uses a non-default pod CIDR.
 
-### Quick Access Links (If accessing from local browser and minikube on EC2 instance):
-- **Prometheus**: `http://localhost:9090`
-- **Grafana**: `http://localhost:3000`
-- **Kube-State-Metrics**: `http://localhost:8080/metrics`
-- **Elasticsearch**: `http://localhost:9200`
-- **Kibana**: `http://localhost:5601`
-- **Blackbox Exporter**: `http://localhost:9115`
+## Running on Minikube + EC2
 
-### Quick Access Links (If accessing services from minikube clusters):
-- **Blackbox Exporter**: `http://<minikube_ip>:<node_port>`
+If you are following the original deployment story (Minikube on an EC2 instance, accessed from a laptop via SSH port-forwarding), see [docs/ec2-minikube-appendix.md](docs/ec2-minikube-appendix.md).
 
----
+## License
 
-Now you're all set up! 🎉 
+[MIT](LICENSE) © 2026 Yash Yadav.
