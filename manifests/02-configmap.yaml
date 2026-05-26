@@ -1,16 +1,61 @@
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: blackbox-exporter-config
   namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: exporter
+    app.kubernetes.io/part-of: monitoring
 data:
   config.yml: |
     modules:
-      http_endpoint:
+      # HTTP GET, accept 2xx + a small set of redirect-friendly codes.
+      http_2xx:
         prober: http
         timeout: 5s
         http:
           valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
-          valid_status_codes: [200, 204]
+          valid_status_codes: [200, 201, 202, 204]
+          method: GET
           no_follow_redirects: false
+          fail_if_ssl: false
+          fail_if_not_ssl: false
           preferred_ip_protocol: "ip4"
+
+      # HTTP POST with an empty body. Useful for liveness checks on
+      # endpoints that explicitly require POST.
+      http_post_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+          valid_status_codes: [200, 201, 202, 204]
+          method: POST
+          preferred_ip_protocol: "ip4"
+
+      # Plain TCP connect; verifies the port is open and accepting
+      # connections. Use for databases, queues, or any non-HTTP service.
+      tcp_connect:
+        prober: tcp
+        timeout: 5s
+        tcp:
+          preferred_ip_protocol: "ip4"
+
+      # DNS A-record lookup over UDP. The query_name here is a default
+      # that callers should override per-target via Prometheus relabeling.
+      dns_udp:
+        prober: dns
+        timeout: 5s
+        dns:
+          transport_protocol: "udp"
+          preferred_ip_protocol: "ip4"
+          query_name: "example.com"
+          query_type: "A"
+
+      # NOTE: icmp is intentionally omitted. The ICMP prober requires
+      # CAP_NET_RAW, which conflicts with capabilities.drop: [ALL] in
+      # the Deployment's securityContext. See the "Enabling ICMP"
+      # section in README.md for the required securityContext changes
+      # and the trade-off.
