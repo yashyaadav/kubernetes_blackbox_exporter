@@ -1,0 +1,72 @@
+---
+# Prometheus-operator path. Apply this only if your cluster has the
+# monitoring.coreos.com CRDs installed (kube-prometheus-stack, etc).
+# Check with:
+#   kubectl api-resources | grep monitoring.coreos.com
+#
+# This file ships two resources:
+#   - ServiceMonitor: scrapes the exporter's own /metrics endpoint
+#     (Go runtime, build info, exporter health).
+#   - Probe: drives /probe against a curated list of external URLs.
+#     This is the prometheus-operator-native way to do blackbox-style
+#     probing — do not try to bend ServiceMonitor into doing it.
+#
+# IMPORTANT: kube-prometheus-stack's Prometheus typically selects
+# ServiceMonitors and Probes by a `release: <chart-release-name>`
+# label. If your Prometheus does not pick these up, add a label like
+#   release: kube-prometheus-stack
+# under metadata.labels on BOTH resources and re-apply.
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: exporter
+    app.kubernetes.io/part-of: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: blackbox-exporter
+      app.kubernetes.io/component: exporter
+  namespaceSelector:
+    matchNames:
+      - monitoring
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      relabelings:
+        - targetLabel: job
+          replacement: blackbox-exporter
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: blackbox-external
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: exporter
+    app.kubernetes.io/part-of: monitoring
+spec:
+  jobName: blackbox
+  interval: 30s
+  scrapeTimeout: 10s
+  module: http_2xx
+  prober:
+    url: blackbox-exporter.monitoring.svc.cluster.local:9115
+    scheme: http
+    path: /probe
+  targets:
+    staticConfig:
+      # Edit this list to probe different URLs. Each entry becomes
+      # an `instance` label in the resulting metrics.
+      static:
+        - https://example.com
+        - https://www.google.com
+      labels:
+        environment: example
