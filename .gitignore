@@ -1,0 +1,24 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Kubernetes / kubeconfig artifacts
+kubeconfig
+*.kubeconfig
+.kube/
+
+# Local-only overrides
+*.local.yaml
+*.local.yml
+secrets/
+
+# Logs
+*.log
