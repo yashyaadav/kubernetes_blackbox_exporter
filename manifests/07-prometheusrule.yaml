@@ -1,0 +1,86 @@
+---
+# Prometheus-operator path. Apply this only if your cluster has the
+# monitoring.coreos.com CRDs installed (kube-prometheus-stack, etc).
+#
+# Same label-selector caveat as the ServiceMonitor: kube-prometheus-stack
+# typically requires a `release: <chart-release-name>` label to pick up
+# user-defined PrometheusRules. Add it if your rules don't get loaded.
+#
+# Job-label convention these rules expect:
+#   - job="blackbox"           on probe-based metrics (from /probe).
+#   - job="blackbox-exporter"  on the exporter's own /metrics scrape.
+# Both are set up by manifests/06-servicemonitor.yaml and
+# prometheus/scrape-config-example.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: blackbox-exporter
+  namespace: monitoring
+  labels:
+    app.kubernetes.io/name: blackbox-exporter
+    app.kubernetes.io/component: exporter
+    app.kubernetes.io/part-of: monitoring
+spec:
+  groups:
+    - name: blackbox-exporter
+      interval: 30s
+      rules:
+        - alert: BlackboxProbeFailing
+          expr: probe_success == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Blackbox probe failing ({{ $labels.instance }})"
+            description: "Probe for {{ $labels.instance }} (module {{ $labels.module }}) has been failing for 5m."
+            runbook_url: "https://github.com/yashyaadav/kubernetes_blackbox_exporter/blob/main/docs/runbooks/blackbox-probe-failing.md"
+
+        - alert: BlackboxProbeSlowHttp
+          expr: 'probe_duration_seconds{job="blackbox"} > 1'
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Blackbox HTTP probe slow ({{ $labels.instance }})"
+            description: "Probe duration for {{ $labels.instance }} has exceeded 1s for 10m (current: {{ $value }}s)."
+            runbook_url: "https://github.com/yashyaadav/kubernetes_blackbox_exporter/blob/main/docs/runbooks/blackbox-probe-slow-http.md"
+
+        - alert: BlackboxSslCertExpiringSoon
+          expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "SSL certificate expiring within 14 days ({{ $labels.instance }})"
+            description: "Certificate for {{ $labels.instance }} expires in less than 14 days."
+            runbook_url: "https://github.com/yashyaadav/kubernetes_blackbox_exporter/blob/main/docs/runbooks/blackbox-ssl-cert-expiring.md"
+
+        - alert: BlackboxSslCertExpiringCritical
+          expr: probe_ssl_earliest_cert_expiry - time() < 3 * 24 * 3600
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "SSL certificate expiring within 3 days ({{ $labels.instance }})"
+            description: "Certificate for {{ $labels.instance }} expires in less than 3 days. Renew now."
+            runbook_url: "https://github.com/yashyaadav/kubernetes_blackbox_exporter/blob/main/docs/runbooks/blackbox-ssl-cert-expiring.md"
+
+        - alert: BlackboxExporterDown
+          expr: 'up{job="blackbox-exporter"} == 0'
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Blackbox exporter is down ({{ $labels.instance }})"
+            description: "Prometheus has been unable to scrape the blackbox exporter for 5m."
+            runbook_url: "https://github.com/yashyaadav/kubernetes_blackbox_exporter/blob/main/docs/runbooks/blackbox-exporter-down.md"
+
+        - alert: BlackboxProbeHttpFailure
+          expr: probe_http_status_code <= 199 or probe_http_status_code >= 400
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Blackbox HTTP probe returned non-2xx/3xx ({{ $labels.instance }})"
+            description: "HTTP status {{ $value }} for {{ $labels.instance }}. The probe may still be reported as successful if the module's valid_status_codes is wide."
+            runbook_url: "https://github.com/yashyaadav/kubernetes_blackbox_exporter/blob/main/docs/runbooks/blackbox-probe-failing.md"
